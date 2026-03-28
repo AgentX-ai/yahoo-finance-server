@@ -66,12 +66,31 @@ export PROXY_URL="socks5://user:pass@127.0.0.1:1080/"
 #### Running the Server
 
 ```bash
-# Basic run
+# Basic run (stdio transport)
 yahoo-finance-server
 
 # Run with proxy
 PROXY_URL="http://127.0.0.1:7890" yahoo-finance-server
+
+# Run with HTTP transport
+yahoo-finance-server --transport http --host localhost --port 3000
+
+# Run with HTTP transport and proxy
+PROXY_URL="http://127.0.0.1:7890" yahoo-finance-server --transport http --host 0.0.0.0 --port 8080
 ```
+
+##### Transport Options
+
+**Stdio Transport (Default)**
+- Best for development and AI assistant integration
+- Communication via stdin/stdout pipes
+- Usage: `yahoo-finance-server` or `yahoo-finance-server --transport stdio`
+
+**HTTP Transport**
+- StreamableHttp transport (replaces deprecated SSE)
+- Allows web-based connections and remote access
+- Usage: `yahoo-finance-server --transport http --host localhost --port 3000`
+- Inspector URL: `http://localhost:3000`
 
 ## 🛠️ API Reference
 
@@ -196,8 +215,18 @@ Get earnings data including historical and upcoming earnings.
 
 ### Using MCP Inspector
 
+**With Stdio Transport (Default)**
 ```bash
 npx @modelcontextprotocol/inspector yahoo-finance-server
+```
+
+**With HTTP Transport**
+```bash
+# Terminal 1: Start server with HTTP transport
+yahoo-finance-server --transport http --host localhost --port 3000
+
+# Terminal 2: Connect inspector to HTTP server
+npx @modelcontextprotocol/inspector http://localhost:3000
 ```
 
 ### Manual Testing

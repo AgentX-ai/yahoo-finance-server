@@ -533,7 +533,7 @@ async def search_yahoo_finance(query: str, count: int = 10) -> Dict[str, Any]:
         raise Exception(f"Failed to search Yahoo Finance: {str(e)}")
 
 
-sectors = Literal[
+Sectors = Literal[
     "basic-materials",
     "communication-services",
     "consumer-cyclical",
@@ -548,7 +548,7 @@ sectors = Literal[
 ]
 
 
-def get_top_etfs(sector: sectors, count: int = 10) -> str:
+def get_top_etfs(sector: Sectors, count: int = 10) -> str:
     """Get top ETFs for a certain sector."""
     if count < 1:
         return "count must be greater than 0"
@@ -560,7 +560,7 @@ def get_top_etfs(sector: sectors, count: int = 10) -> str:
     return "\n".join(result[:count])
 
 
-def get_top_mutual_funds(sector: sectors, count: int = 10) -> str:
+def get_top_mutual_funds(sector: Sectors, count: int = 10) -> str:
     """Retrieve popular mutual funds for a sector, returned as a list in 'SYMBOL: Fund Name' format."""
     if count < 1:
         return "count must be greater than 0"
@@ -569,7 +569,7 @@ def get_top_mutual_funds(sector: sectors, count: int = 10) -> str:
     return "\n".join(f"{symbol}: {name}" for symbol, name in s.top_mutual_funds.items())
 
 
-def get_top_companies(sector: sectors, count: int = 10) -> str:
+def get_top_companies(sector: Sectors, count: int = 10) -> str:
     """Get top companies in a sector with name, analyst rating, and market weight as JSON array."""
     if count < 1:
         return "count must be greater than 0"
@@ -582,7 +582,7 @@ def get_top_companies(sector: sectors, count: int = 10) -> str:
     return df.iloc[:count].to_json(orient="records")
 
 
-def get_top_growth_companies(sector: sectors, count: int = 10) -> str:
+def get_top_growth_companies(sector: Sectors, count: int = 10) -> str:
     """Get top growth companies grouped by industry within a sector as JSON array with growth metrics."""
     if count < 1:
         return "count must be greater than 0"
@@ -605,7 +605,7 @@ def get_top_growth_companies(sector: sectors, count: int = 10) -> str:
     return json.dumps(results, ensure_ascii=False)
 
 
-def get_top_performing_companies(sector: sectors, count: int = 10) -> str:
+def get_top_performing_companies(sector: Sectors, count: int = 10) -> str:
     """Get top performing companies grouped by industry within a sector as JSON array with performance metrics."""
     if count < 1:
         return "count must be greater than 0"
@@ -632,7 +632,7 @@ async def get_top_entities(
     entity_type: Literal[
         "etfs", "mutual_funds", "companies", "growth_companies", "performing_companies"
     ],
-    sector: sectors,
+    sector: Sectors,
     count: int = 10,
 ) -> Dict[str, Any]:
     """
@@ -1097,6 +1097,393 @@ async def get_ticker_earnings(
     except Exception as e:
         logger.error(f"Error getting earnings for {symbol}: {e}")
         raise Exception(f"Failed to get earnings data: {str(e)}")
+
+
+def _download_filing_content(url: str) -> Dict[str, Any]:
+    """
+    Download content from SEC filing URL.
+    
+    Args:
+        url: URL of the SEC filing document
+        
+    Returns:
+        Dictionary containing content, content_type, size, and any error info
+    """
+    try:
+        session = _get_enhanced_session()
+        
+        # Set headers to appear as a browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
+        
+        response = session.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('content-type', 'text/plain').split(';')[0]
+        content_size = len(response.content)
+        
+        # Handle different content types
+        if 'text/' in content_type or 'application/xml' in content_type:
+            # Text-based content (HTML, XML, plain text)
+            content = response.text
+        elif 'application/pdf' in content_type:
+            # PDF content - return as base64 for now
+            import base64
+            content = base64.b64encode(response.content).decode('utf-8')
+        else:
+            # Other binary content
+            import base64
+            content = base64.b64encode(response.content).decode('utf-8')
+        
+        return {
+            "content": content,
+            "content_type": content_type,
+            "size": content_size,
+            "status": "success"
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Failed to download filing content from {url}: {e}")
+        return {
+            "content": "",
+            "content_type": "text/plain",
+            "size": 0,
+            "error": f"Download failed: {str(e)}",
+            "status": "error"
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error downloading filing content from {url}: {e}")
+        return {
+            "content": "",
+            "content_type": "text/plain", 
+            "size": 0,
+            "error": f"Unexpected error: {str(e)}",
+            "status": "error"
+        }
+
+
+async def get_filing_content(url: str) -> Dict[str, Any]:
+    """
+    Download and return the content of a specific SEC filing document.
+    
+    Args:
+        url: URL of the SEC filing document to download
+        
+    Returns:
+        Dictionary containing the file content, content type, size, and metadata
+    """
+    try:
+        def _get_content():
+            if not url:
+                return {
+                    "url": url,
+                    "error": "URL is required",
+                    "content": "",
+                    "content_type": "text/plain",
+                    "size": 0,
+                    "status": "error"
+                }
+            
+            # Download the filing content
+            content_result = _download_filing_content(url)
+            
+            return {
+                "url": url,
+                "content": content_result["content"],
+                "content_type": content_result["content_type"], 
+                "size": content_result["size"],
+                "status": content_result["status"],
+                "error": content_result.get("error", "")
+            }
+        
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        content_data = await loop.run_in_executor(None, _get_content)
+        
+        return content_data
+        
+    except Exception as e:
+        logger.error(f"Error getting filing content from {url}: {e}")
+        return {
+            "url": url,
+            "error": f"Failed to get filing content: {str(e)}",
+            "content": "",
+            "content_type": "text/plain",
+            "size": 0,
+            "status": "error"
+        }
+
+
+async def get_institutional_holders(symbol: str, count: int = 10) -> Dict[str, Any]:
+    """
+    Get institutional holders data for a stock symbol.
+
+    Args:
+        symbol: Stock symbol (e.g., 'AAPL', 'GOOGL')
+        count: Number of institutional holders to return (default: 10)
+
+    Returns:
+        Dictionary containing institutional holders data
+    """
+    try:
+
+        def _get_institutional_data():
+            ticker = _create_enhanced_ticker(symbol)
+
+            try:
+                # Get institutional holders using yfinance method
+                institutional_data = ticker.institutional_holders
+                
+                if institutional_data is None or institutional_data.empty:
+                    logger.debug(f"No institutional holders found for {symbol}")
+                    return {
+                        "symbol": symbol,
+                        "holders_count": 0,
+                        "holders": [],
+                    }
+
+                # Process the institutional holders data
+                processed_holders = []
+                
+                # Limit to requested count
+                holders_limited = institutional_data.head(count)
+                
+                for _, holder in holders_limited.iterrows():
+                    holder_data = {
+                        "date_reported": (
+                            holder.get("Date Reported").strftime("%Y-%m-%d")
+                            if pd.notna(holder.get("Date Reported"))
+                            else ""
+                        ),
+                        "holder": holder.get("Holder", ""),
+                        "pct_held": float(holder.get("pctHeld", 0)) if pd.notna(holder.get("pctHeld")) else 0,
+                        "shares": int(holder.get("Shares", 0)) if pd.notna(holder.get("Shares")) else 0,
+                        "value": int(holder.get("Value", 0)) if pd.notna(holder.get("Value")) else 0,
+                        "pct_change": float(holder.get("pctChange", 0)) if pd.notna(holder.get("pctChange")) else 0,
+                    }
+                    processed_holders.append(holder_data)
+
+                return {
+                    "symbol": symbol,
+                    "holders_count": len(processed_holders),
+                    "holders": processed_holders,
+                }
+
+            except Exception as e:
+                logger.error(f"Failed to get institutional holders for {symbol}: {e}")
+                return {
+                    "symbol": symbol,
+                    "error": f"Unable to fetch institutional holders: {str(e)}",
+                    "holders_count": 0,
+                    "holders": [],
+                }
+
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        institutional_data = await loop.run_in_executor(None, _get_institutional_data)
+
+        return institutional_data
+
+    except Exception as e:
+        logger.error(f"Error getting institutional holders for {symbol}: {e}")
+        raise Exception(f"Failed to get institutional holders: {str(e)}")
+
+
+async def get_insider_transactions(symbol: str, count: int = 50) -> Dict[str, Any]:
+    """
+    Get insider transactions data for a stock symbol.
+
+    Args:
+        symbol: Stock symbol (e.g., 'AAPL', 'GOOGL')
+        count: Number of transactions to return (default: 50)
+
+    Returns:
+        Dictionary containing insider transactions data
+    """
+    try:
+
+        def _get_insider_data():
+            ticker = _create_enhanced_ticker(symbol)
+
+            try:
+                # Get insider transactions using yfinance method
+                insider_data = ticker.insider_transactions
+                
+                if insider_data is None or insider_data.empty:
+                    logger.debug(f"No insider transactions found for {symbol}")
+                    return {
+                        "symbol": symbol,
+                        "transactions_count": 0,
+                        "transactions": [],
+                    }
+
+                # Process the insider transactions data
+                processed_transactions = []
+                
+                # Limit to requested count
+                transactions_limited = insider_data.head(count)
+                
+                for _, transaction in transactions_limited.iterrows():
+                    transaction_data = {
+                        "shares": int(transaction.get("Shares", 0)) if pd.notna(transaction.get("Shares")) else 0,
+                        "value": float(transaction.get("Value", 0)) if pd.notna(transaction.get("Value")) else 0,
+                        "url": transaction.get("URL", ""),
+                        "text": transaction.get("Text", ""),
+                        "insider": transaction.get("Insider", ""),
+                        "position": transaction.get("Position", ""),
+                        "transaction_date": (
+                            transaction.get("Transaction Start Date").strftime("%Y-%m-%d")
+                            if pd.notna(transaction.get("Transaction Start Date"))
+                            else ""
+                        ),
+                        "ownership": transaction.get("Ownership", ""),
+                    }
+                    processed_transactions.append(transaction_data)
+
+                return {
+                    "symbol": symbol,
+                    "transactions_count": len(processed_transactions),
+                    "transactions": processed_transactions,
+                }
+
+            except Exception as e:
+                logger.error(f"Failed to get insider transactions for {symbol}: {e}")
+                return {
+                    "symbol": symbol,
+                    "error": f"Unable to fetch insider transactions: {str(e)}",
+                    "transactions_count": 0,
+                    "transactions": [],
+                }
+
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        insider_data = await loop.run_in_executor(None, _get_insider_data)
+
+        return insider_data
+
+    except Exception as e:
+        logger.error(f"Error getting insider transactions for {symbol}: {e}")
+        raise Exception(f"Failed to get insider transactions: {str(e)}")
+
+
+async def get_ticker_filings(symbol: str, count: int = 100) -> Dict[str, Any]:
+    """
+    Get SEC filings for a stock symbol using yfinance get_sec_filings method.
+
+    Args:
+        symbol: Stock symbol (e.g., 'AAPL', 'GOOGL')
+        count: Number of filings to retrieve (default: 100)
+
+    Returns:
+        Dictionary containing SEC filings data
+    """
+    try:
+
+        def _get_filings():
+            ticker = _create_enhanced_ticker(symbol)
+
+            try:
+                # Get SEC filings using yfinance method
+                filings = ticker.get_sec_filings()
+                
+                if not filings:
+                    logger.debug(f"No SEC filings found for {symbol}")
+                    return {
+                        "symbol": symbol,
+                        "filings_count": 0,
+                        "filings": [],
+                    }
+
+                # Process the filings data
+                processed_filings = []
+                
+                # Limit to requested count
+                filings_limited = filings[:count] if len(filings) > count else filings
+                
+                for filing in filings_limited:
+                    # Handle exhibits - get all exhibit types without downloading content
+                    exhibits_data = filing.get("exhibits", {})
+                    all_exhibits = []
+                    
+                    if isinstance(exhibits_data, dict) and exhibits_data:
+                        # Collect exhibit metadata only (no content download)
+                        for exhibit_type, url in exhibits_data.items():
+                            if url:  # Only include non-empty URLs
+                                all_exhibits.append({
+                                    "exhibit_type": exhibit_type,
+                                    "url": url
+                                })
+                    
+                    filing_data = {
+                        "type": filing.get("type", ""),
+                        "date": (
+                            filing.get("date").strftime("%Y-%m-%d")
+                            if pd.notna(filing.get("date"))
+                            else ""
+                        ),
+                        "title": filing.get("title", ""),
+                        "url": all_exhibits[0]["url"] if all_exhibits else "",  # First URL for backward compatibility
+                        "exhibits": all_exhibits,  # All exhibits with URLs only
+                        "total_exhibits": len(all_exhibits),
+                    }
+                    
+                    # Handle different column names that might exist
+                    if "filingDate" in filing:
+                        filing_data["filing_date"] = (
+                            filing["filingDate"].strftime("%Y-%m-%d")
+                            if pd.notna(filing["filingDate"])
+                            else ""
+                        )
+                    
+                    if "acceptanceDate" in filing:
+                        filing_data["acceptance_date"] = (
+                            filing["acceptanceDate"].strftime("%Y-%m-%d %H:%M:%S")
+                            if pd.notna(filing["acceptanceDate"])
+                            else ""
+                        )
+                    
+                    if "reportDate" in filing:
+                        filing_data["report_date"] = (
+                            filing["reportDate"].strftime("%Y-%m-%d")
+                            if pd.notna(filing["reportDate"])
+                            else ""
+                        )
+                    
+                    if "edgarUrl" in filing:
+                        filing_data["edgar_url"] = filing.get("edgarUrl", "")
+                    
+                    processed_filings.append(filing_data)
+
+                return {
+                    "symbol": symbol,
+                    "filings_count": len(processed_filings),
+                    "filings": processed_filings,
+                }
+
+            except Exception as e:
+                logger.error(f"Failed to get SEC filings for {symbol}: {e}")
+                return {
+                    "symbol": symbol,
+                    "error": f"Unable to fetch SEC filings: {str(e)}",
+                    "filings_count": 0,
+                    "filings": [],
+                }
+
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        filings_data = await loop.run_in_executor(None, _get_filings)
+
+        return filings_data
+
+    except Exception as e:
+        logger.error(f"Error getting SEC filings for {symbol}: {e}")
+        raise Exception(f"Failed to get SEC filings: {str(e)}")
 
 
 def _create_enhanced_ticker(symbol: str):
